@@ -154,7 +154,6 @@ Detailed diagrams are located in:
 - docs/system-context.md
 - docs/integration-architecture.md
 - docs/orchestration-flow.md
-
 ---
 
 ## AI Usage Disclosure
