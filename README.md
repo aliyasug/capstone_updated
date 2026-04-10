@@ -1,226 +1,168 @@
-# EAI Capstone Project — Enterprise Integration with Node-RED
-
-> Production-ready **Saga orchestration** with **verified Docker deployment**, **compensation flows**, and **runtime health checks**.
+# Enterprise Order Processing Integration System
 
 ## Overview
 
-This project implements an **Enterprise Application Integration (EAI)** solution using **Node-RED** as the central orchestration engine.
+This project demonstrates an Enterprise Application Integration (EAI) solution for orchestrating order processing using Node-RED.
 
-The orchestrator coordinates four microservices:
+The system coordinates multiple microservices involved in e-commerce order fulfillment:
 
-* **Order Service**
-* **Payment Service**
-* **Inventory Service**
-* **Notification Service**
+- Order Service
+- Payment Service
+- Inventory Service
+- Notification Service
 
-The solution focuses on:
-
-* centralized workflow orchestration
-* Saga-based distributed consistency
-* compensation (refund / release) scenarios
-* retry and fault tolerance
-* correlation-based traceability
-* containerized deployment with reproducible startup
-
----
-
-## Deployment Requirements (Important)
-
-The project is packaged so that the **actual submitted `flows.json` is loaded into `/data/flows.json` inside the Node-RED container at startup**.
-
-This guarantees that the required endpoints exist at runtime:
-
-* `GET /health`
-* `POST /order`
-* `POST /admin/payment/fail-mode`
-* `POST /admin/inventory/fail-mode`
-* `POST /admin/reset`
-
-Without this mapping, Node-RED starts with the default starter flow, which breaks rubric verification.
-
-### Docker volume mapping
-
-```yaml
-services:
-  nodered:
-    image: nodered/node-red
-    ports:
-      - "1880:1880"
-    volumes:
-      - ./flows.json:/data/flows.json
-```
+Node-RED acts as the central integration/orchestration layer.
 
 ---
 
 ## Architecture Decision
 
-### Why Node-RED
+This implementation uses **Node-RED as the main entry point** for incoming client requests.
 
-Node-RED is used as the **Process Manager** and orchestration layer because it:
+Architecture Flow:
 
-* visually represents Saga flow logic
-* simplifies HTTP-based service coordination
-* supports retries and branching logic
-* provides fast debugging during demos
-* clearly maps to Enterprise Integration Patterns
+Client → Node-RED → Order Service → Payment Service → Inventory Service → Notification Service
 
----
+### Why this approach?
 
-## Runtime Endpoints
+Node-RED was selected as the entry point because:
 
-### Public endpoints
-
-| Endpoint  | Method | Purpose                     |
-| --------- | ------ | --------------------------- |
-| `/health` | GET    | runtime health verification |
-| `/order`  | POST   | create order Saga           |
-
-### Admin endpoints (required for testing)
-
-| Endpoint                     | Method | Purpose                     |
-| ---------------------------- | ------ | --------------------------- |
-| `/admin/payment/fail-mode`   | POST   | simulate payment failures   |
-| `/admin/inventory/fail-mode` | POST   | simulate inventory failures |
-| `/admin/reset`               | POST   | reset all failure flags     |
-
----
-
-## Business Flow
-
-### Happy Path
-
-1. Client sends `POST /order`
-2. Node-RED creates `correlationId`
-3. Order is created
-4. Payment is authorized
-5. Inventory is reserved
-6. Notification is sent (best-effort)
-7. Response returns `completed`
-
----
-
-## Compensation Scenarios
-
-### 1) Payment failure
-
-* retry payment **3 times**
-* if still failed → stop flow
-* return `error`
-
-### 2) Inventory failure (required compensation)
-
-* payment succeeds
-* inventory reservation fails
-* retry inventory **3 times**
-* trigger **payment refund compensation**
-* return `compensated`
-
-### 3) Notification failure
-
-* best-effort retry
-* business flow remains successful
-* return `completed_with_warning`
+- it centralizes orchestration logic;
+- simplifies compensation handling;
+- allows visual monitoring of business flow;
+- reduces coupling between client and internal services.
 
 ---
 
 ## Enterprise Integration Patterns Used
 
-| Pattern                  | Node-RED implementation   |
-| ------------------------ | ------------------------- |
-| Process Manager          | main orchestration flow   |
-| Request-Reply            | HTTP request nodes        |
-| Retry Pattern            | retry subflows            |
-| Correlation Identifier   | `correlationId`           |
-| Content-Based Router     | switch nodes              |
-| Dead Letter Channel      | centralized error handler |
-| Compensating Transaction | refund branch             |
-
-> Only patterns that are **actually implemented in the flow** are listed here.
+| Pattern | Problem It Solves | Where Applied | Why Chosen |
+|--------|-----------------|--------------|-----------|
+| Content-Based Router | Routes requests based on validation result | Input validation step | To separate valid/invalid orders |
+| Correlation Identifier | Tracks request through all services | correlationId generated at flow start | For traceability |
+| Request-Reply | Synchronous communication with services | HTTP Request nodes | Needed for immediate responses |
+| Dead Letter Channel | Handles failed requests | Error output / failed branch | Captures invalid/failed messages |
 
 ---
 
-## Example API Usage
+## Business Logic
 
-### Health check
+### Happy Path
 
-```bash
-curl http://localhost:1880/health
-```
-
-### Happy path
-
-```bash
-curl -X POST http://localhost:1880/order \
-  -H "Content-Type: application/json" \
-  -d '{"item":"book","amount":50}'
-```
-
-### Force inventory compensation
-
-```bash
-curl -X POST http://localhost:1880/admin/inventory/fail-mode \
-  -H "Content-Type: application/json" \
-  -d '{"mode":"always"}'
-
-curl -X POST http://localhost:1880/order \
-  -H "Content-Type: application/json" \
-  -d '{"item":"book","amount":50}'
-```
+1. Client sends POST /order request
+2. Node-RED validates payload
+3. Order Service creates order
+4. Payment Service authorizes payment
+5. Inventory Service reserves stock
+6. Notification Service sends confirmation
+7. Final response returned with trace log
 
 ---
 
-## Expected Response Example
+### Failure Scenario 1 — Payment Failure
+
+If payment authorization fails:
+
+- process stops immediately;
+- inventory reservation is skipped;
+- notification is skipped;
+- response status becomes **failed**.
+
+---
+
+### Failure Scenario 2 — Inventory Failure
+
+If inventory reservation fails after successful payment:
+
+- payment refund compensation is triggered;
+- status becomes **compensated**.
+
+---
+
+## API Endpoint
+
+### Main Endpoint
+
+```bash
+POST http://localhost:1880/order
+```
+
+Example Body:
 
 ```json
 {
-  "orderId": "123",
-  "correlationId": "1742834567890-abc123",
-  "status": "compensated",
-  "trace": [
-    { "step": "order", "status": "success" },
-    { "step": "payment", "status": "success" },
-    { "step": "inventory", "status": "failed" },
-    { "step": "refund", "status": "success" }
-  ]
+  "product": "phone"
 }
 ```
 
 ---
 
-## How to Run
+## Example Success Response
+
+```json
+{
+  "orderId": "12345",
+  "correlationId": "abc-123",
+  "status": "completed"
+}
+```
+
+---
+
+## Running the Project
+
+### Start all services
 
 ```bash
 docker compose up -d --build
 ```
 
-Verify:
+### Open Node-RED
 
 ```bash
-curl http://localhost:1880/health
-```
-
-Stop:
-
-```bash
-docker compose down
+http://localhost:1880
 ```
 
 ---
 
-## What Was Improved After Feedback
+## Testing
 
-Based on professor feedback, the following critical issues were fixed:
+### Successful Order Test
 
-* actual `flows.json` now loads into container runtime
-* default starter flow issue removed
-* `/health` endpoint added
-* admin failure simulation endpoints added
-* README claims aligned only with implemented behavior
-* removed leftover AI-generated chat fragments
-* added explicit end-to-end compensation test cases
+```bash
+curl -X POST http://localhost:1880/order \
+-H "Content-Type: application/json" \
+-d '{"product":"phone"}'
+```
 
 ---
 
-System Architecture
-<img width="974" height="1382" alt="image" src="https://github.com/user-attachments/assets/7eca7c1b-2069-4060-81bd-96c69afee91b" />
-<img width="972" height="296" alt="image" src="https://github.com/user-attachments/assets/896d4d50-4e03-4ce7-8121-7c8a188283b7" />
+### Invalid Order Test
+
+```bash
+curl -X POST http://localhost:1880/order \
+-H "Content-Type: application/json" \
+-d '{}'
+```
+
+---
+
+## Documentation
+
+Detailed diagrams are located in:
+
+- docs/system-context.md
+- docs/integration-architecture.md
+- docs/orchestration-flow.md
+
+---
+
+## AI Usage Disclosure
+
+AI tools were used to assist with:
+
+- architecture refinement;
+- documentation formatting;
+- EIP explanation.
+
+All implementation and configuration were manually reviewed and adapted.
